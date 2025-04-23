@@ -1,4 +1,4 @@
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -21,6 +21,13 @@ class Settings(BaseSettings):
 
     # RetailCRM
     retailcrm_api_key: str
+    retailcrm_base_url: str
+    retailcrm_site: str
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+    )
 
     @property
     def db_url(self) -> str:
@@ -32,9 +39,5 @@ class Settings(BaseSettings):
             f"{self.postgres_password}@{self.postgres_host}:"
             f"{self.postgres_port}/{self.postgres_db}"
         )
-
-    class Config:
-        env_file = ".env"
-
 
 settings = Settings()
