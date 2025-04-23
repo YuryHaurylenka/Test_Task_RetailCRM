@@ -1,5 +1,6 @@
-from datetime import date
+from datetime import datetime
 from typing import Optional
+
 from pydantic import BaseModel, EmailStr, ConfigDict
 
 
@@ -14,14 +15,30 @@ class CustomerCreate(CustomerBase):
     pass
 
 
-class CustomerRead(CustomerBase):
-    model_config = ConfigDict(from_attributes=True)
+def to_camel(s: str) -> str:
+    parts = s.split("_")
+    return parts[0] + "".join(w.capitalize() for w in parts[1:])
+
+
+class CustomerRead(BaseModel):
     id: int
-    registered_at: date
+    first_name: str
+    last_name: Optional[str]
+    email: str
+    phone: Optional[str]
+    registered_at: datetime
+
+    model_config = ConfigDict(
+        alias_generator=to_camel,
+        populate_by_name=True,
+        extra="ignore",
+    )
 
 
 class CustomerFilter(BaseModel):
     first_name: Optional[str] = None
     email: Optional[EmailStr] = None
-    registered_from: Optional[date] = None
-    registered_to: Optional[date] = None
+    registered_from: Optional[datetime] = None
+    registered_to: Optional[datetime] = None
+    page: int = 1
+    limit: int = 20

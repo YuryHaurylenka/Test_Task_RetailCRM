@@ -18,6 +18,3 @@ class PaymentRead(PaymentBase):
     id: int
     status: PaymentStatus
     paid_at: datetime
-
-    class Config:
-        orm_mode = True
