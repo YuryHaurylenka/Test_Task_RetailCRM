@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from typing import List
+from typing import Any, Dict, List
 
 from fastapi import HTTPException, status
 from httpx import HTTPError
@@ -10,113 +10,105 @@ from app.services.retailcrm_client import RetailCRMClient
 
 
 def generate_order_number() -> str:
-    return f"ORD-{datetime.now():%Y%m%d%H%M%S}-{uuid.uuid4().hex[:6].upper()}"
+    return f"ORD-{datetime.utcnow():%Y%m%d%H%M%S}-{uuid.uuid4().hex[:6].upper()}"
 
 
 class OrderService:
     def __init__(self, crm: RetailCRMClient) -> None:
-        self.crm = crm
+        self._crm = crm
 
-    async def create(self, payload: OrderCreate) -> OrderRead:
-        order_payload = {
-            "orderNumber": generate_order_number(),
-            "customer": {"id": payload.customer_id},
+    def _map_raw(self, raw: Dict[str, Any]) -> OrderRead:
+        items_src = raw.get("customProducts") or raw.get("items") or []
+        mapped: Dict[str, Any] = {
+            "id": raw.get("id", 0),
+            "orderNumber": raw.get("orderNumber") or raw.get("number", ""),
+            "createdAt": raw.get("createdAt", ""),
+            "customerId": (raw.get("customer") or {}).get("id", 0),
             "items": [
                 {
+                    "productId": item.get("externalId", ""),
+                    "name": item.get("name", ""),
+                    "quantity": item.get("quantity", 0),
+                    "price": item.get("initialPrice", 0),
+                }
+                for item in items_src
+            ],
+        }
+        try:
+            return OrderRead.model_validate(mapped)
+        except Exception as exc:
+            raise HTTPException(
+                status.HTTP_502_BAD_GATEWAY,
+                detail=f"Failed to parse order data: {exc}",
+            )
+
+    async def create(self, payload: OrderCreate) -> OrderRead:
+        payload_data: Dict[str, Any] = {
+            "orderNumber": generate_order_number(),
+            "customer": {"id": payload.customer_id},
+            "customProducts": [
+                {
+                    "externalId": item.external_id,
                     "name": item.name,
                     "quantity": item.quantity,
                     "initialPrice": item.price,
-                    "externalId": item.external_id,
                 }
                 for item in payload.items
             ],
         }
-
         try:
-            create_resp = await self.crm.create_order(order_payload)
-        except HTTPError as e:
+            response = await self._crm.create_order(payload_data)
+        except HTTPError as exc:
             raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=f"Failed to create order in RetailCRM: {e}",
+                status.HTTP_502_BAD_GATEWAY,
+                detail=f"Error creating order in RetailCRM: {exc}",
             )
 
-        order_id = create_resp.get("id")
+        order_id = response.get("id")
         if not isinstance(order_id, int):
             raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=f"Unexpected create-order response: {create_resp}",
+                status.HTTP_502_BAD_GATEWAY,
+                detail=f"Invalid create-order response: {response}",
             )
 
         try:
-            full = await self.crm.get_order(order_id)
-        except HTTPError as e:
+            order_data = await self._crm.get_order(order_id)
+        except HTTPError as exc:
             raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=f"Failed to fetch created order: {e}",
+                status.HTTP_502_BAD_GATEWAY,
+                detail=f"Error fetching created order: {exc}",
             )
 
-        raw = full.get("order", {}) or {}
-
-        mapped = {
-            "id": raw.get("id", 0),
-            "orderNumber": raw.get("orderNumber") or raw.get("number") or "",
-            "createdAt": raw.get("createdAt") or "",
-            "customerId": (raw.get("customer") or {}).get("id") or 0,
-            "items": [
-                {
-                    "productId": i.get("externalId") or "",
-                    "name": i.get("name") or "",
-                    "quantity": i.get("quantity") or 0,
-                    "price": i.get("initialPrice") or 0,
-                }
-                for i in raw.get("items", [])
-            ],
-        }
-
-        try:
-            return OrderRead.model_validate(mapped)
-        except Exception as e:
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=f"Failed to parse order data: {e}",
-            )
+        raw_order = order_data.get("order") or {}
+        return self._map_raw(raw_order)
 
     async def list_by_customer(
         self, customer_id: int, page: int = 1, limit: int = 20
     ) -> List[OrderRead]:
         try:
-            resp = await self.crm.get_orders(
+            summary = await self._crm.get_orders(
                 customer_id=customer_id, page=page, limit=limit
             )
-        except HTTPError as e:
+        except HTTPError as exc:
             raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=f"Failed to fetch orders from RetailCRM: {e}",
+                status.HTTP_502_BAD_GATEWAY,
+                detail=f"Error fetching orders list: {exc}",
             )
 
-        raw_list = resp.get("orders", [])
-        result: List[OrderRead] = []
-
-        for raw in raw_list:
-            raw_items = raw.get("customProducts", [])
-            mapped = {
-                "id": raw.get("id", 0),
-                "orderNumber": raw.get("orderNumber") or raw.get("number") or "",
-                "createdAt": raw.get("createdAt") or "",
-                "customerId": (raw.get("customer") or {}).get("id") or 0,
-                "items": [
-                    {
-                        "productId": i.get("externalId") or "",
-                        "name": i.get("name") or "",
-                        "quantity": i.get("quantity") or 0,
-                        "price": i.get("initialPrice") or 0,
-                    }
-                    for i in raw_items
-                ],
-            }
+        orders: List[OrderRead] = []
+        for entry in summary.get("orders", []):
+            oid = entry.get("id")
+            if not isinstance(oid, int):
+                continue
             try:
-                result.append(OrderRead.model_validate(mapped))
-            except Exception:
+                order_data = await self._crm.get_order(oid)
+            except HTTPError:
                 continue
 
-        return result
+            raw_order = order_data.get("order") or {}
+            try:
+                orders.append(self._map_raw(raw_order))
+            except HTTPException:
+                continue
+
+        return orders
