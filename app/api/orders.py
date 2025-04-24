@@ -32,18 +32,18 @@ def get_payment_service(
 async def list_orders_for_client(
     client_id: int,
     service: OrderService = Depends(get_order_service),
-):
+) -> List[OrderRead]:
     try:
         return await service.list_by_customer(client_id)
-    except HTTPError as e:
+    except HTTPError as exc:
         raise HTTPException(
             status.HTTP_502_BAD_GATEWAY,
-            detail=f"Failed to fetch orders from RetailCRM: {e}",
+            detail=f"Failed to fetch orders from RetailCRM: {exc}",
         )
-    except Exception as e:
+    except Exception as exc:
         raise HTTPException(
             status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Internal error while listing orders: {e}",
+            detail=f"Internal error while listing orders: {exc}",
         )
 
 
@@ -51,20 +51,20 @@ async def list_orders_for_client(
 async def create_order(
     payload: OrderCreate,
     service: OrderService = Depends(get_order_service),
-):
+) -> OrderRead:
     try:
         return await service.create(payload)
-    except HTTPError as e:
+    except HTTPError as exc:
         raise HTTPException(
             status.HTTP_502_BAD_GATEWAY,
-            detail=f"Failed to create order in RetailCRM: {e}",
+            detail=f"Failed to create order in RetailCRM: {exc}",
         )
     except HTTPException:
         raise
-    except Exception as e:
+    except Exception as exc:
         raise HTTPException(
             status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Internal error while creating order: {e}",
+            detail=f"Internal error while creating order: {exc}",
         )
 
 
@@ -77,18 +77,18 @@ async def create_payment(
     order_id: int,
     payload: PaymentCreate,
     service: PaymentService = Depends(get_payment_service),
-):
+) -> PaymentRead:
     try:
         return await service.create(order_id, payload)
-    except HTTPError as e:
+    except HTTPError as exc:
         raise HTTPException(
             status.HTTP_502_BAD_GATEWAY,
-            detail=f"Failed to create payment in RetailCRM: {e}",
+            detail=f"Failed to create payment in RetailCRM: {exc}",
         )
     except HTTPException:
         raise
-    except Exception as e:
+    except Exception as exc:
         raise HTTPException(
             status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Internal error while creating payment: {e}",
+            detail=f"Internal error while creating payment: {exc}",
         )
