@@ -1,6 +1,6 @@
 from datetime import datetime
 from decimal import Decimal
-from typing import List, Optional
+from typing import List
 
 from pydantic import Field
 
@@ -8,15 +8,19 @@ from .base import CamelModel
 
 
 class ProductItem(CamelModel):
-    name: str
-    quantity: int
-    price: Decimal
-    external_id: Optional[str] = Field(None, alias="externalId")
+    quantity: int = Field(..., ge=1, description="Item quantity (≥ 1)")
+    price: Decimal = Field(..., ge=0, description="Unit price in the order currency")
 
 
 class OrderCreate(CamelModel):
-    customer_id: int = Field(..., alias="customerId")
-    items: List[ProductItem]
+    customer_id: int = Field(
+        ..., alias="customerId", ge=1, description="Internal customer identifier"
+    )
+    items: List[ProductItem] = Field(
+        ...,
+        min_length=1,
+        description="At least one order line-item must be provided",
+    )
 
 
 class OrderRead(CamelModel):
