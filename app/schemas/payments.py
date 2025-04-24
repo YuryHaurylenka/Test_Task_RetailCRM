@@ -1,20 +1,19 @@
 from datetime import datetime
-from decimal import Decimal
-from pydantic import BaseModel, ConfigDict
-from app.db.models import PaymentMethod, PaymentStatus
+from typing import Optional
+
+from pydantic import Field
+
+from .base import CamelModel
 
 
-class PaymentBase(BaseModel):
-    amount: Decimal
-    method: PaymentMethod
+class PaymentCreate(CamelModel):
+    amount: float
+    comment: Optional[str] = None
 
 
-class PaymentCreate(PaymentBase):
-    order_id: int
-
-
-class PaymentRead(PaymentBase):
-    model_config = ConfigDict(from_attributes=True)
+class PaymentRead(CamelModel):
     id: int
-    status: PaymentStatus
-    paid_at: datetime
+    order_id: int = Field(..., alias="orderId")
+    amount: float
+    comment: Optional[str] = None
+    created_at: datetime = Field(..., alias="createdAt")
