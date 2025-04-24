@@ -1,162 +1,99 @@
-import json
-from typing import Any, Dict, List, Optional
+from typing import List
 
-import httpx
+from fastapi import HTTPException, status
+from httpx import HTTPError, HTTPStatusError
 
-from app.core.config import settings
+from app.schemas.customers import CustomerCreate, CustomerFilter, CustomerRead
+from app.services.retailcrm_client import RetailCRMClient
 
 
-class RetailCRMClient:
-    def __init__(self) -> None:
-        self._client = httpx.AsyncClient(
-            base_url=f"{settings.retailcrm_base_url}/api/v5",
-            headers={"X-API-KEY": settings.retailcrm_api_key},
-            timeout=10.0,
+class CustomerService:
+    def __init__(self, crm: RetailCRMClient) -> None:
+        self._crm = crm
+
+    def _map_customer(self, raw: dict) -> CustomerRead:
+        phones = raw.get("phones") or []
+        first_phone = (
+            phones[0].get("number") if phones and isinstance(phones[0], dict) else None
         )
-        self._site = settings.retailcrm_site
 
-    async def get_customers(
-        self,
-        first_name: Optional[str] = None,
-        email: Optional[str] = None,
-        registered_from: Optional[str] = None,
-        registered_to: Optional[str] = None,
-        page: int = 1,
-        limit: int = 20,
-    ) -> Dict[str, Any]:
-        params = {"site": self._site, "page": page, "limit": limit}
-        if first_name:
-            params["filter[firstName]"] = first_name
-        if email:
-            params["filter[email]"] = email
-        if registered_from:
-            params["filter[createdAtFrom]"] = registered_from
-        if registered_to:
-            params["filter[createdAtTo]"] = registered_to
+        created_at = raw.get("createdAt", "")
+        created_at = created_at.replace(" ", "T") if created_at else ""
 
-        r = await self._client.get("/customers", params=params)
-        r.raise_for_status()
-        return r.json()
-
-    async def create_customer(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        form = {"site": self._site, "customer": json.dumps(data, default=str)}
-        r = await self._client.post(
-            "/customers/create",
-            data=form,
-            headers={"Content-Type": "application/x-www-form-urlencoded"},
-        )
-        r.raise_for_status()
-        return r.json()
-
-    async def get_customer(self, customer_id: int) -> Dict[str, Any]:
-        r = await self._client.get(
-            f"/customers/{customer_id}",
-            params={"by": "id", "site": self._site},
-        )
-        r.raise_for_status()
-        return r.json()
-
-    async def get_orders(
-        self,
-        customer_id: int,
-        page: int = 1,
-        limit: int = 20,
-    ) -> Dict[str, Any]:
-        params = {
-            "site": self._site,
-            "filter[customerId]": customer_id,
-            "page": page,
-            "limit": limit,
+        mapped = {
+            "id": raw.get("id"),
+            "first_name": raw.get("firstName") or "",
+            "last_name": raw.get("lastName"),
+            "email": raw.get("email") or "",
+            "phone": first_phone,
+            "registered_at": created_at,
         }
-        r = await self._client.get("/orders", params=params)
-        r.raise_for_status()
-        return r.json()
+        return CustomerRead.model_validate(mapped)
 
-    async def create_order(self, order: Dict[str, Any]) -> Dict[str, Any]:
-        form = {"site": self._site, "order": json.dumps(order, default=str)}
-        r = await self._client.post(
-            "/orders/create",
-            data=form,
-            headers={"Content-Type": "application/x-www-form-urlencoded"},
-        )
-        r.raise_for_status()
-        return r.json()
-
-    async def get_order(self, order_id: int) -> Dict[str, Any]:
-        r = await self._client.get(
-            f"/orders/{order_id}",
-            params={"by": "id", "site": self._site},
-        )
-        r.raise_for_status()
-        return r.json()
-
-    async def get_products(self, external_id: str) -> List[Dict[str, Any]]:
-        """
-        Поиск товара в каталоге по внешнему идентификатору.
-        """
-        params = {"site": self._site, "filter[externalId]": external_id}
-        r = await self._client.get("/store/products", params=params)
-        r.raise_for_status()
-        return r.json().get("products", [])
-
-    async def batch_create_products(self, products: List[Dict[str, Any]]) -> List[int]:
-        """
-        Пакетная регистрация товаров в каталоге.
-        Задаёт catalogId=1 по умолчанию.
-        """
-        payload = [
-            {
-                "externalId": p["externalId"],
-                "name": p["name"],
-                "catalogId": 1,  # Жёстко прописано
-                "type": "product",
-                "initialPrice": p["initialPrice"],
-            }
-            for p in products
-        ]
-        form = {
-            "site": self._site,
-            "products": json.dumps(payload, default=str),
-        }
-        r = await self._client.post(
-            "/store/products/batch/create",
-            data=form,
-            headers={"Content-Type": "application/x-www-form-urlencoded"},
-        )
-        r.raise_for_status()
-        return r.json().get("addedProducts", [])
-
-    async def get_payment_types(self) -> List[str]:
-        r = await self._client.get(
-            "/reference/payment-types",
-            params={"site": self._site},
-        )
-        r.raise_for_status()
-        data = r.json().get("paymentTypes", {})
-        if isinstance(data, dict):
-            return [
-                info.get("code") for info in data.values() if isinstance(info, dict)
-            ]
-        if isinstance(data, list):
-            return [info.get("code") for info in data if isinstance(info, dict)]
-        return []
-
-    async def create_payment(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        form = {"site": self._site, "payment": json.dumps(data, default=str)}
-        r = await self._client.post(
-            "/orders/payments/create",
-            data=form,
-            headers={"Content-Type": "application/x-www-form-urlencoded"},
-        )
+    async def list(self, filters: CustomerFilter) -> List[CustomerRead]:
         try:
-            r.raise_for_status()
-        except httpx.HTTPStatusError as e:
-            body = (
-                r.json()
-                if r.headers.get("content-type", "").startswith("application/json")
-                else r.text
+            resp = await self._crm.get_customers(
+                name=filters.first_name,
+                email=filters.email,
+                registered_from=(
+                    filters.registered_from.isoformat()
+                    if filters.registered_from
+                    else None
+                ),
+                registered_to=(
+                    filters.registered_to.isoformat() if filters.registered_to else None
+                ),
+                page=filters.page,
+                limit=filters.limit,
             )
-            raise httpx.HTTPStatusError(
-                f"{r.status_code}: {body}", request=e.request, response=r
+        except HTTPError as exc:
+            raise HTTPException(
+                status.HTTP_502_BAD_GATEWAY, detail=f"Failed to fetch customers: {exc}"
             )
-        return r.json()
+
+        raw_list = resp.get("customers", [])
+        result: List[CustomerRead] = []
+        for raw in raw_list:
+            try:
+                result.append(self._map_customer(raw))
+            except Exception:
+                continue
+        return result
+
+    async def create(self, payload: CustomerCreate) -> CustomerRead:
+        data = payload.model_dump(by_alias=True, exclude_none=True)
+        if phone := data.pop("phone", None):
+            data["phones"] = [{"number": phone}]
+
+        try:
+            resp = await self._crm.create_customer(data)
+        except HTTPStatusError as exc:
+            body = {}
+            try:
+                body = exc.response.json()
+            except Exception:
+                pass
+            detail = body.get("errorMsg") or body or str(exc)
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=detail)
+        except HTTPError as exc:
+            raise HTTPException(
+                status.HTTP_502_BAD_GATEWAY, detail=f"Failed to create customer: {exc}"
+            )
+
+        cust_id = resp.get("id")
+        if not isinstance(cust_id, int):
+            raise HTTPException(
+                status.HTTP_502_BAD_GATEWAY,
+                detail=f"Unexpected create response: {resp}",
+            )
+
+        try:
+            full = await self._crm.get_customer(cust_id)
+        except HTTPError as exc:
+            raise HTTPException(
+                status.HTTP_502_BAD_GATEWAY,
+                detail=f"Failed to fetch created customer: {exc}",
+            )
+
+        raw = full.get("customer", {})
+        return self._map_customer(raw)

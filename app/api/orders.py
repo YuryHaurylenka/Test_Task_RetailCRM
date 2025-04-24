@@ -28,13 +28,13 @@ def get_payment_service(
     return PaymentService(crm)
 
 
-@router.get("/client/{client_id}", response_model=List[OrderRead])
+@router.get("/customer/{customer_id}", response_model=List[OrderRead])
 async def list_orders_for_client(
-    client_id: int,
+    customer_id: int,
     service: OrderService = Depends(get_order_service),
 ) -> List[OrderRead]:
     try:
-        return await service.list_by_customer(client_id)
+        return await service.list_by_customer(customer_id)
     except HTTPError as exc:
         raise HTTPException(
             status.HTTP_502_BAD_GATEWAY,

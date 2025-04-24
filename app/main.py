@@ -7,7 +7,7 @@ from app.core.config import settings
 
 def create_app() -> FastAPI:
     app = FastAPI(title=settings.project_name, debug=settings.debug)
-    app.include_router(api_router, prefix=settings.api_prefix)
+    app.include_router(api_router)
 
     @app.get("/", include_in_schema=False)
     async def root() -> RedirectResponse:

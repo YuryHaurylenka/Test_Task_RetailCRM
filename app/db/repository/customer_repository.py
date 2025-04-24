@@ -1,6 +1,8 @@
-from typing import Optional, Any, Coroutine, Sequence
+from typing import Optional, Sequence
 
+from fastapi import HTTPException
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import Customer
@@ -32,6 +34,16 @@ class CustomerRepository:
     async def create(self, data: CustomerCreate) -> Customer:
         customer = Customer(**data.model_dump())
         self.session.add(customer)
-        await self.session.commit()
+        try:
+            await self.session.commit()
+        except IntegrityError as exc:
+            await self.session.rollback()
+
+            if "uq_customers_email" in str(exc.orig):
+                raise HTTPException(400, "User with this email already exists")
+            if "uq_customers_phone" in str(exc.orig):
+                raise HTTPException(400, "User with this phone already exists")
+
+            raise
         await self.session.refresh(customer)
         return customer
