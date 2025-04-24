@@ -1,5 +1,5 @@
 import json
-from typing import Any, Dict, Optional, List
+from typing import Any, Dict, List, Optional
 
 import httpx
 
@@ -13,7 +13,7 @@ class RetailCRMClient:
             headers={"X-API-KEY": settings.retailcrm_api_key},
             timeout=10.0,
         )
-        self._site=settings.retailcrm_site
+        self._site = settings.retailcrm_site
 
     async def get_customers(
         self,
@@ -24,7 +24,7 @@ class RetailCRMClient:
         page: int = 1,
         limit: int = 20,
     ) -> Dict[str, Any]:
-        params: Dict[str, Any] = {"page": page, "limit": limit}
+        params: Dict[str, Any] = {"site": self._site, "page": page, "limit": limit}
         if first_name:
             params["filter[firstName]"] = first_name
         if email:
@@ -39,7 +39,7 @@ class RetailCRMClient:
         return response.json()
 
     async def create_customer(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        form = {"customer": json.dumps(data)}
+        form = {"site": self._site, "customer": json.dumps(data, default=str)}
         response = await self._client.post(
             "/customers/create",
             data=form,
@@ -48,9 +48,10 @@ class RetailCRMClient:
         response.raise_for_status()
         return response.json()
 
-    async def get_customer(self, customer_id: int) -> dict:
+    async def get_customer(self, customer_id: int) -> Dict[str, Any]:
         response = await self._client.get(
-            f"/customers/{customer_id}", params={"by": "id"}
+            f"/customers/{customer_id}",
+            params={"by": "id", "site": self._site},
         )
         response.raise_for_status()
         return response.json()
@@ -61,7 +62,8 @@ class RetailCRMClient:
         page: int = 1,
         limit: int = 20,
     ) -> Dict[str, Any]:
-        params = {
+        params: Dict[str, Any] = {
+            "site": self._site,
             "filter[customerId]": customer_id,
             "page": page,
             "limit": limit,
@@ -70,55 +72,86 @@ class RetailCRMClient:
         response.raise_for_status()
         return response.json()
 
-    async def create_order(self, order: Dict[str, Any]) -> Dict[str, Any]:
-        form = {
-            "site": settings.retailcrm_site,
-            "order": json.dumps(order, default=str),
-        }
-        resp = await self._client.post(
-            "/orders/create",
-            data=form,
-            headers={"Content-Type": "application/x-www-form-urlencoded"},
-        )
-        resp.raise_for_status()
-        return resp.json()
-
-    async def get_order(self, order_id: int) -> dict:
-        r = await self._client.get(
-            f"/orders/{order_id}",
-            params={"by": "id"}
-        )
-        r.raise_for_status()
-        return r.json()
-
-    async def create_payment(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        form = {"payment": json.dumps(data, default=str)}
+    async def create_order(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        form = {"site": self._site, "order": json.dumps(data, default=str)}
         response = await self._client.post(
-            "/orders/payment/create",
+            "/orders/create",
             data=form,
             headers={"Content-Type": "application/x-www-form-urlencoded"},
         )
         response.raise_for_status()
         return response.json()
 
-    async def get_products(self, external_id: str) -> List[Dict[str, Any]]:
-        r = await self._client.get(
-            "/store/products", params={"filter[externalId]": external_id}
+    async def get_order(self, order_id: int) -> Dict[str, Any]:
+        response = await self._client.get(
+            f"/orders/{order_id}",
+            params={"by": "id", "site": self._site},
         )
-        r.raise_for_status()
-        data = r.json()
-        return data.get("products", [])
+        response.raise_for_status()
+        return response.json()
 
-    async def batch_create_products(self, products: list[dict]) -> list[int]:
-        form = {
-            "site": settings.retailcrm_site,
-            "products": json.dumps(products, default=str),
-        }
-        r = await self._client.post(
+    async def get_products(self, external_id: str) -> List[Dict[str, Any]]:
+        response = await self._client.get(
+            "/store/products",
+            params={"site": self._site, "filter[externalId]": external_id},
+        )
+        response.raise_for_status()
+        return response.json().get("products", [])
+
+    async def batch_create_products(self, products: List[Dict[str, Any]]) -> List[int]:
+        payload = [
+            {
+                "externalId": p["externalId"],
+                "name": p["name"],
+                "catalogId": 1,
+                "type": "product",
+                "initialPrice": p["initialPrice"],
+            }
+            for p in products
+        ]
+        form = {"site": self._site, "products": json.dumps(payload, default=str)}
+        response = await self._client.post(
             "/store/products/batch/create",
             data=form,
             headers={"Content-Type": "application/x-www-form-urlencoded"},
         )
-        r.raise_for_status()
-        data = r.json()
-        return data.get("addedProducts", [])
+        response.raise_for_status()
+        return response.json().get("addedProducts", [])
+
+    async def get_payment_types(self) -> List[str]:
+        response = await self._client.get(
+            "/reference/payment-types", params={"site": self._site}
+        )
+        response.raise_for_status()
+        data = response.json().get("paymentTypes", {})
+        if isinstance(data, dict):
+            return [
+                info.get("code") for info in data.values() if isinstance(info, dict)
+            ]
+        if isinstance(data, list):
+            return [info.get("code") for info in data if isinstance(info, dict)]
+        return []
+
+    async def create_payment(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        form = {"site": self._site, "payment": json.dumps(data, default=str)}
+        response = await self._client.post(
+            "/orders/payments/create",
+            data=form,
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as error:
+            body = (
+                response.json()
+                if response.headers.get("content-type", "").startswith(
+                    "application/json"
+                )
+                else response.text
+            )
+            raise httpx.HTTPStatusError(
+                f"{response.status_code}: {body}",
+                request=error.request,
+                response=response,
+            )
+        return response.json()
