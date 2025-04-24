@@ -1,135 +1,162 @@
-from typing import List, Optional
+import json
+from typing import Any, Dict, List, Optional
 
-from fastapi import HTTPException, status
-from httpx import HTTPError
+import httpx
 
-from app.schemas.customers import CustomerRead, CustomerCreate, CustomerFilter
-from app.services.retailcrm_client import RetailCRMClient
+from app.core.config import settings
 
 
-class CustomerService:
-    def __init__(self, crm: RetailCRMClient) -> None:
-        self.crm = crm
+class RetailCRMClient:
+    def __init__(self) -> None:
+        self._client = httpx.AsyncClient(
+            base_url=f"{settings.retailcrm_base_url}/api/v5",
+            headers={"X-API-KEY": settings.retailcrm_api_key},
+            timeout=10.0,
+        )
+        self._site = settings.retailcrm_site
 
-    async def list(self, filters: CustomerFilter) -> List[CustomerRead]:
-        try:
-            resp = await self.crm.get_customers(
-                first_name=filters.first_name,
-                email=filters.email,
-                registered_from=(
-                    filters.registered_from.isoformat()
-                    if filters.registered_from
-                    else None
-                ),
-                registered_to=(
-                    filters.registered_to.isoformat() if filters.registered_to else None
-                ),
-                page=filters.page,
-                limit=filters.limit,
-            )
-        except HTTPError as e:
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=f"Failed to fetch customers: {e}",
-            )
+    async def get_customers(
+        self,
+        first_name: Optional[str] = None,
+        email: Optional[str] = None,
+        registered_from: Optional[str] = None,
+        registered_to: Optional[str] = None,
+        page: int = 1,
+        limit: int = 20,
+    ) -> Dict[str, Any]:
+        params = {"site": self._site, "page": page, "limit": limit}
+        if first_name:
+            params["filter[firstName]"] = first_name
+        if email:
+            params["filter[email]"] = email
+        if registered_from:
+            params["filter[createdAtFrom]"] = registered_from
+        if registered_to:
+            params["filter[createdAtTo]"] = registered_to
 
-        raw_list = resp.get("customers", [])
-        result: List[CustomerRead] = []
+        r = await self._client.get("/customers", params=params)
+        r.raise_for_status()
+        return r.json()
 
-        for raw in raw_list:
-            phone: Optional[str] = (raw.get("phones") or [None])[0]
+    async def create_customer(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        form = {"site": self._site, "customer": json.dumps(data, default=str)}
+        r = await self._client.post(
+            "/customers/create",
+            data=form,
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+        r.raise_for_status()
+        return r.json()
 
-            raw_dt: Optional[str] = raw.get("createdAt")
-            if raw_dt:
-                dt_str = raw_dt.replace(" ", "T")
-            else:
-                dt_str = None
+    async def get_customer(self, customer_id: int) -> Dict[str, Any]:
+        r = await self._client.get(
+            f"/customers/{customer_id}",
+            params={"by": "id", "site": self._site},
+        )
+        r.raise_for_status()
+        return r.json()
 
-            mapped = {
-                "id": raw.get("id"),
-                "first_name": raw.get("firstName") or "",
-                "last_name": raw.get("lastName"),
-                "email": raw.get("email") or "",
-                "phone": phone,
-                "registered_at": dt_str,
-            }
-
-            try:
-                customer = CustomerRead.model_validate(mapped)
-            except Exception as e:
-                continue
-
-            result.append(customer)
-
-        return result
-
-    async def create(self, payload: CustomerCreate) -> CustomerRead:
-
-        try:
-            resp_email = await self.crm.get_customers(email=payload.email, limit=1)
-        except HTTPError as e:
-            raise HTTPException(
-                status.HTTP_502_BAD_GATEWAY,
-                detail=f"Failed to check existing email: {e}",
-            )
-        if resp_email.get("customers"):
-            raise HTTPException(
-                status.HTTP_400_BAD_REQUEST,
-                detail="A customer with this email already exists",
-            )
-
-        if payload.phone:
-            try:
-                resp_phone = await self.crm.get_customers(page=1, limit=100)
-            except HTTPError as e:
-                raise HTTPException(
-                    status.HTTP_502_BAD_GATEWAY,
-                    detail=f"Failed to check existing phone: {e}",
-                )
-            for raw in resp_phone.get("customers", []):
-                phones: list[str] = raw.get("phones") or []
-                if payload.phone in phones:
-                    raise HTTPException(
-                        status.HTTP_400_BAD_REQUEST,
-                        detail="A customer with this phone number already exists",
-                    )
-
-        try:
-            resp = await self.crm.create_customer(payload.model_dump())
-        except HTTPError as e:
-            raise HTTPException(
-                status.HTTP_502_BAD_GATEWAY, detail=f"Failed to create customer: {e}"
-            )
-
-        cust_id = resp.get("id")
-        if not isinstance(cust_id, int):
-            raise HTTPException(
-                status.HTTP_502_BAD_GATEWAY,
-                detail=f"Unexpected create response: {resp}",
-            )
-
-        try:
-            full = await self.crm.get_customer(cust_id)
-        except HTTPError as e:
-            raise HTTPException(
-                status.HTTP_502_BAD_GATEWAY,
-                detail=f"Failed to fetch created customer: {e}",
-            )
-
-        raw = full.get("customer")
-        if not isinstance(raw, dict):
-            raise HTTPException(
-                status.HTTP_502_BAD_GATEWAY,
-                detail=f"Invalid get-customer response: {full}",
-            )
-
-        first_phone = (raw.get("phones") or [None])[0]
-        mapped = {
-            "id": raw.get("id"),
-            "first_name": raw.get("firstName"),
-            "last_name": raw.get("lastName"),
-            "email": raw.get("email"),
-            "phone": first_phone,
-            "registered_at": raw.get("createdAt"),
+    async def get_orders(
+        self,
+        customer_id: int,
+        page: int = 1,
+        limit: int = 20,
+    ) -> Dict[str, Any]:
+        params = {
+            "site": self._site,
+            "filter[customerId]": customer_id,
+            "page": page,
+            "limit": limit,
         }
-        return CustomerRead.model_validate(mapped)
+        r = await self._client.get("/orders", params=params)
+        r.raise_for_status()
+        return r.json()
+
+    async def create_order(self, order: Dict[str, Any]) -> Dict[str, Any]:
+        form = {"site": self._site, "order": json.dumps(order, default=str)}
+        r = await self._client.post(
+            "/orders/create",
+            data=form,
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+        r.raise_for_status()
+        return r.json()
+
+    async def get_order(self, order_id: int) -> Dict[str, Any]:
+        r = await self._client.get(
+            f"/orders/{order_id}",
+            params={"by": "id", "site": self._site},
+        )
+        r.raise_for_status()
+        return r.json()
+
+    async def get_products(self, external_id: str) -> List[Dict[str, Any]]:
+        """
+        Поиск товара в каталоге по внешнему идентификатору.
+        """
+        params = {"site": self._site, "filter[externalId]": external_id}
+        r = await self._client.get("/store/products", params=params)
+        r.raise_for_status()
+        return r.json().get("products", [])
+
+    async def batch_create_products(self, products: List[Dict[str, Any]]) -> List[int]:
+        """
+        Пакетная регистрация товаров в каталоге.
+        Задаёт catalogId=1 по умолчанию.
+        """
+        payload = [
+            {
+                "externalId": p["externalId"],
+                "name": p["name"],
+                "catalogId": 1,  # Жёстко прописано
+                "type": "product",
+                "initialPrice": p["initialPrice"],
+            }
+            for p in products
+        ]
+        form = {
+            "site": self._site,
+            "products": json.dumps(payload, default=str),
+        }
+        r = await self._client.post(
+            "/store/products/batch/create",
+            data=form,
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+        r.raise_for_status()
+        return r.json().get("addedProducts", [])
+
+    async def get_payment_types(self) -> List[str]:
+        r = await self._client.get(
+            "/reference/payment-types",
+            params={"site": self._site},
+        )
+        r.raise_for_status()
+        data = r.json().get("paymentTypes", {})
+        if isinstance(data, dict):
+            return [
+                info.get("code") for info in data.values() if isinstance(info, dict)
+            ]
+        if isinstance(data, list):
+            return [info.get("code") for info in data if isinstance(info, dict)]
+        return []
+
+    async def create_payment(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        form = {"site": self._site, "payment": json.dumps(data, default=str)}
+        r = await self._client.post(
+            "/orders/payments/create",
+            data=form,
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+        try:
+            r.raise_for_status()
+        except httpx.HTTPStatusError as e:
+            body = (
+                r.json()
+                if r.headers.get("content-type", "").startswith("application/json")
+                else r.text
+            )
+            raise httpx.HTTPStatusError(
+                f"{r.status_code}: {body}", request=e.request, response=r
+            )
+        return r.json()
