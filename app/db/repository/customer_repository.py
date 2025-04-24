@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import Optional, Any, Coroutine, Sequence
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -8,13 +8,14 @@ from app.schemas.customers import CustomerCreate, CustomerFilter
 
 
 class CustomerRepository:
-    def __init__(self, session: AsyncSession):
+
+    def __init__(self, session: AsyncSession) -> None:
         self.session = session
 
     async def get(self, customer_id: int) -> Optional[Customer]:
         return await self.session.get(Customer, customer_id)
 
-    async def list(self, filters: CustomerFilter | None = None) -> List[Customer]:
+    async def list(self, filters: CustomerFilter | None = None) -> Sequence[Customer]:
         stmt = select(Customer)
         if filters:
             if filters.first_name:
@@ -29,7 +30,7 @@ class CustomerRepository:
         return result.scalars().all()
 
     async def create(self, data: CustomerCreate) -> Customer:
-        customer = Customer(**data.dict())
+        customer = Customer(**data.model_dump())
         self.session.add(customer)
         await self.session.commit()
         await self.session.refresh(customer)

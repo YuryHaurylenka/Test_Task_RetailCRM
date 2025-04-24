@@ -24,37 +24,35 @@ def get_customer_service(
 async def list_customers(
     filters: CustomerFilter = Depends(),
     service: CustomerService = Depends(get_customer_service),
-):
+) -> List[CustomerRead]:
     try:
         return await service.list(filters)
-    except HTTPError as e:
+    except HTTPError as exc:
         raise HTTPException(
             status.HTTP_502_BAD_GATEWAY,
-            detail=f"Failed to fetch customers from RetailCRM: {e}"
+            detail=f"Failed to fetch customers from RetailCRM: {exc}",
         )
-    except Exception as e:
+    except Exception as exc:
         raise HTTPException(
             status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Internal error while listing customers: {e}"
+            detail=f"Internal error while listing customers: {exc}",
         )
 
 
-@router.post(
-    "/", response_model=CustomerRead, status_code=status.HTTP_201_CREATED
-)
+@router.post("/", response_model=CustomerRead, status_code=status.HTTP_201_CREATED)
 async def create_customer(
     payload: CustomerCreate,
     service: CustomerService = Depends(get_customer_service),
-):
+) -> CustomerRead:
     try:
         return await service.create(payload)
-    except HTTPError as e:
+    except HTTPError as exc:
         raise HTTPException(
             status.HTTP_502_BAD_GATEWAY,
-            detail=f"Failed to create customer in RetailCRM: {e}"
+            detail=f"Failed to create customer in RetailCRM: {exc}",
         )
-    except Exception as e:
+    except Exception as exc:
         raise HTTPException(
             status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Internal error while creating customer: {e}"
+            detail=f"Internal error while creating customer: {exc}",
         )
